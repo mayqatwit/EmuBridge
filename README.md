@@ -1,4 +1,4 @@
-# Grid Selector (pygame + joystick)
+# Initial window test program
 
 A window with a grid of buttons you can move around and select with a game
 controller, keyboard or mouse.
