@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from typing import List, Optional
 
+import os
+
+# Let the library hear the controller even while an emulator window has focus.
+os.environ.setdefault("SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "1")
+
 import pygame
 
 import config
 from input_system import InputManager
-from scenes import GridScene, Scene
+from scenes import LibraryScene, Scene
 
 
 class App:
@@ -24,6 +29,7 @@ class App:
             repeat_interval=config.REPEAT_INTERVAL,
             confirm_buttons=config.JOY_CONFIRM_BUTTONS,
             back_buttons=config.JOY_BACK_BUTTONS,
+            sort_buttons=config.JOY_SORT_BUTTONS,
             dpad_buttons=config.JOY_DPAD_BUTTONS,
         )
         self.fonts = {
@@ -31,6 +37,7 @@ class App:
             "button": pygame.font.Font(None, 34),
             "body": pygame.font.Font(None, 30),
             "small": pygame.font.Font(None, 24),
+            "card": pygame.font.Font(None, 26),
         }
         self.scenes: List[Scene] = []
 
@@ -49,7 +56,7 @@ class App:
 
     # ---- main loop --------------------------------------------------------
     def run(self, max_frames: Optional[int] = None) -> None:
-        self.push(GridScene(self))
+        self.push(LibraryScene(self))
         frames = 0
         while self.running:
             dt = self.clock.tick(config.FPS) / 1000.0

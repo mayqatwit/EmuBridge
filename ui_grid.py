@@ -122,3 +122,131 @@ class ButtonGrid:
                                  width=3, border_radius=16 + grow)
             label = font.render(btn.label, True, fg)
             surface.blit(label, label.get_rect(center=r.center))
+
+
+class LibraryGrid:
+    """Scrolling grid of game cards (cover-style tiles), Steam library style."""
+
+    def __init__(self, rect, card_size, gap: int = 20) -> None:
+        self.rect = pygame.Rect(rect)
+        self.cw, self.ch = card_size
+        self.gap = gap
+        self.cols = max(1, (self.rect.w + gap) // (self.cw + gap))
+        self.games: list = []
+        self.index = 0
+        self.scroll = 0.0       # current pixel offset (animated)
+        self.target = 0         # wanted pixel offset
+
+    def set_games(self, games, keep=None) -> None:
+        self.games = list(games)
+        self.index = self.games.index(keep) if keep in self.games else 0
+        self._follow()
+
+    @property
+    def selected(self):
+        return self.games[self.index] if self.games else None
+
+    def _card_rect(self, i: int) -> pygame.Rect:
+        r, c = divmod(i, self.cols)
+        x0 = self.rect.x + (self.rect.w - (self.cols * (self.cw + self.gap) - self.gap)) // 2
+        return pygame.Rect(x0 + c * (self.cw + self.gap),
+                           self.rect.y + 12 + r * (self.ch + self.gap) - round(self.scroll),
+                           self.cw, self.ch)
+
+    def _follow(self) -> None:
+        row = self.index // self.cols
+        top = row * (self.ch + self.gap)
+        if top < self.target:
+            self.target = top
+        elif top + self.ch + 24 > self.target + self.rect.h:
+            self.target = top + self.ch + 24 - self.rect.h
+
+    def move(self, dcol: int, drow: int) -> None:
+        if not self.games:
+            return
+        n = len(self.games)
+        i = self.index + dcol + drow * self.cols
+        if dcol and i // self.cols != self.index // self.cols and 0 <= i < n:
+            pass  # allow wrapping across row ends for left/right
+        self.index = min(max(i, 0), n - 1)
+        self._follow()
+
+    def handle_input(self, inp: InputManager):
+        if inp.pressed(Action.UP): self.move(0, -1)
+        if inp.pressed(Action.DOWN): self.move(0, 1)
+        if inp.pressed(Action.LEFT): self.move(-1, 0)
+        if inp.pressed(Action.RIGHT): self.move(1, 0)
+        if inp.pressed(Action.CONFIRM):
+            return self.selected
+        return None
+
+    def handle_mouse(self, event):
+        if event.type == pygame.MOUSEWHEEL:
+            rows = math.ceil(len(self.games) / self.cols)
+            max_scroll = max(0, rows * (self.ch + self.gap) + 24 - self.rect.h)
+            self.target = min(max(self.target - event.y * 60, 0), max_scroll)
+        elif event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN):
+            if not self.rect.collidepoint(event.pos):
+                return None
+            for i in range(len(self.games)):
+                if self._card_rect(i).collidepoint(event.pos):
+                    self.index = i
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        return self.games[i]
+        return None
+
+    @staticmethod
+    def _wrap(text: str, font, width: int):
+        lines, cur = [], ""
+        for word in text.split():
+            test = f"{cur} {word}".strip()
+            if font.size(test)[0] <= width:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = word
+        if cur:
+            lines.append(cur)
+        return lines[:4]
+
+    def draw(self, surface, font, small, theme, t: float) -> None:
+        import config  # local import keeps ui_grid free of app config at import time
+        self.scroll += (self.target - self.scroll) * 0.25
+        prev_clip = surface.get_clip()
+        surface.set_clip(self.rect)
+        pulse = (math.sin(t * 6) + 1) / 2
+        for i, game in enumerate(self.games):
+            r = self._card_rect(i)
+            if r.bottom < self.rect.top or r.top > self.rect.bottom:
+                continue
+            focused = i == self.index
+            if focused:
+                r = r.inflate(10, 10)
+            color = config.EMULATORS[game.emulator]["color"]
+            # vertical gradient "cover"
+            for y in range(r.h):
+                k = y / r.h
+                c = tuple(int(color[j] * (1 - k) + theme["bg"][j] * k * 0.6) for j in range(3))
+                pygame.draw.line(surface, c, (r.x, r.y + y), (r.right - 1, r.y + y))
+            # console badge
+            badge = small.render(game.console, True, theme["text"])
+            pygame.draw.rect(surface, (0, 0, 0), badge.get_rect(topleft=(r.x + 8, r.y + 8)).inflate(10, 6), border_radius=4)
+            surface.blit(badge, (r.x + 8, r.y + 8))
+            # title
+            lines = self._wrap(game.title, font, r.w - 20)
+            y = r.bottom - 14 - len(lines) * font.get_linesize()
+            for line in lines:
+                surface.blit(font.render(line, True, theme["text"]), (r.x + 10, y))
+                y += font.get_linesize()
+            if not game.exists:
+                m = small.render("file missing", True, theme["missing"])
+                surface.blit(m, (r.x + 10, r.y + 36))
+            if focused:
+                grow = 2 + round(pulse * 3)
+                pygame.draw.rect(surface, theme["focus"], r.inflate(grow * 2, grow * 2),
+                                 width=3, border_radius=8)
+        if not self.games:
+            msg = font.render("No games for this console", True, theme["text_dim"])
+            surface.blit(msg, msg.get_rect(center=self.rect.center))
+        surface.set_clip(prev_clip)

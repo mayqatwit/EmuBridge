@@ -23,6 +23,7 @@ class Action(enum.Enum):
     RIGHT = enum.auto()
     CONFIRM = enum.auto()
     BACK = enum.auto()
+    SORT = enum.auto()
 
 
 DIRECTIONS = (Action.UP, Action.DOWN, Action.LEFT, Action.RIGHT)
@@ -34,6 +35,7 @@ KEY_BINDINGS: Dict[Action, tuple] = {
     Action.RIGHT: (pygame.K_RIGHT, pygame.K_d),
     Action.CONFIRM: (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE),
     Action.BACK: (pygame.K_ESCAPE, pygame.K_BACKSPACE),
+    Action.SORT: (pygame.K_TAB, pygame.K_q),
 }
 
 
@@ -45,6 +47,7 @@ class InputManager:
         repeat_interval: float = 0.09,
         confirm_buttons: Iterable[int] = (0,),
         back_buttons: Iterable[int] = (1,),
+        sort_buttons: Iterable[int] = (3,),
         dpad_buttons: Optional[Dict[str, int]] = None,
     ) -> None:
         if not pygame.joystick.get_init():
@@ -54,6 +57,7 @@ class InputManager:
         self.repeat_interval = repeat_interval
         self.confirm_buttons = tuple(confirm_buttons)
         self.back_buttons = tuple(back_buttons)
+        self.sort_buttons = tuple(sort_buttons)
         dpad = dpad_buttons or {}
         self.dpad_buttons = {
             Action.UP: dpad.get("up"),
@@ -132,6 +136,8 @@ class InputManager:
                 dirs.add(Action.CONFIRM)
             if any(down(i) for i in self.back_buttons):
                 dirs.add(Action.BACK)
+            if any(down(i) for i in self.sort_buttons):
+                dirs.add(Action.SORT)
 
             for action in dirs:
                 held.setdefault(action, src)

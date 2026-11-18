@@ -4,8 +4,9 @@ from __future__ import annotations
 import pygame
 
 import config
+import library
 from input_system import Action
-from ui_grid import ButtonGrid, GridButton
+from ui_grid import ButtonGrid, GridButton, LibraryGrid
 
 
 class Scene:
@@ -19,72 +20,143 @@ class Scene:
     def draw(self, surface: pygame.Surface) -> None: ...
 
 
-class GridScene(Scene):
+class LibraryScene(Scene):
+    """Steam-style grid of every game across all emulators."""
+
+    HEADER = 110
+    FOOTER = 90
+
     def __init__(self, app) -> None:
         super().__init__(app)
+        self.games = library.scan()
+        library.load_history(self.games)
+        self.sort_mode = 0
+        self.filters = [None] + list(config.EMULATORS)  # None = all consoles
+        self.filter_index = 0
+        self.process = None
+        self.running_game = None
         w, h = app.screen.get_size()
-        buttons = [GridButton(label, on_press=self._toggle) for label in config.BUTTON_LABELS]
-        self.grid = ButtonGrid(pygame.Rect(60, 110, w - 120, h - 230),
-                               config.GRID_COLS, buttons, wrap=config.GRID_WRAP)
-        self.message = "Move with D-pad / stick / arrows. Select with A / Enter."
+        self.grid = LibraryGrid(pygame.Rect(40, self.HEADER, w - 80, h - self.HEADER - self.FOOTER),
+                                config.CARD_SIZE, config.CARD_GAP)
+        self.message = (f"{len(self.games)} games found. A/Enter: play   Y/Tab: sort"
+                        if self.games else "No games found - add rom_dirs or GAMES in config.py")
+        self._refresh()
 
-    def _toggle(self, btn: GridButton) -> None:
-        btn.toggled = not btn.toggled
-        if btn.toggled:
-            self.selected_game = config.GAMES[btn.label]
-            self.message = f"Selected {self.selected_game['emulator']} with game {self.selected_game['game_path']}"
-        self.message = f"{btn.label} turned {'ON' if btn.toggled else 'OFF'}"
+    # ---- library state -------------------------------------------------------
+    def _refresh(self, keep: library.Game = None) -> None:
+        f = self.filters[self.filter_index]
+        visible = [g for g in self.games if f is None or g.emulator == f]
+        self.grid.set_games(library.sort_games(visible, self.sort_mode), keep)
 
+    def cycle_sort(self) -> None:
+        self.sort_mode = (self.sort_mode + 1) % len(library.SORT_MODES)
+        self._refresh(self.grid.selected)
+        self.message = f"Sorted by {library.SORT_MODES[self.sort_mode][0]}"
+
+    def cycle_filter(self, step: int = 1) -> None:
+        self.filter_index = (self.filter_index + step) % len(self.filters)
+        self._refresh()
+
+    def play(self, game: library.Game) -> None:
+        if self.process and self.process.poll() is None:
+            self.message = f"{self.running_game.title} is still running"
+            return
+        self.process, self.message = library.launch(game)
+        if self.process:
+            self.running_game = game
+            library.save_history(self.games)
+
+    # ---- scene hooks -----------------------------------------------------------
     def handle_event(self, event) -> None:
-        self.grid.handle_mouse(event)
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for i, r in enumerate(self._tab_rects()):
+                if r.collidepoint(event.pos):
+                    self.filter_index = i
+                    self._refresh()
+                    return
+            if self._sort_rect().collidepoint(event.pos):
+                self.cycle_sort()
+                return
+        picked = self.grid.handle_mouse(event)
+        if picked:
+            self.play(picked)
+
+    def _exit_combo_held(self) -> bool:
+        for joy in self.app.input.joysticks.values():
+            n = joy.get_numbuttons()
+            for combo in config.EXIT_COMBOS:
+                if all(b < n and joy.get_button(b) for b in combo):
+                    return True
+        return False
 
     def update(self, dt: float) -> None:
+        if self.process and self.process.poll() is None:
+            # Game running: only watch for the "close game" button combo.
+            if self._exit_combo_held():
+                self.exit_hold = getattr(self, "exit_hold", 0.0) + dt
+                if self.exit_hold >= config.EXIT_HOLD_SECONDS:
+                    library.stop(self.process)
+                    self.exit_hold = 0.0
+            else:
+                self.exit_hold = 0.0
+            return
+        if self.process and self.process.poll() is not None:
+            self.message = f"Finished {self.running_game.title}"
+            self.process = self.running_game = None
         inp = self.app.input
-        self.grid.handle_input(inp)
+        picked = self.grid.handle_input(inp)
+        if picked:
+            self.play(picked)
+        if inp.pressed(Action.SORT):
+            self.cycle_sort()
         if inp.pressed(Action.BACK):
             self.app.push(ConfirmQuitScene(self.app))
-    
-    def activate(self) -> Optional[GridButton]:
-        btn = self.grid.selected
-        print("1")
-        if not btn.enabled:
-            print("2")
-            return None
-        if btn.on_press:
-            print("3")
-            btn.on_press(btn)
-        if self.selected_game:
-            print("4")
-            emulator_path = self.selected_game["emulator"]
-            subprocess.Popen([emulator_path, self.selected_game["game_path"]])
-            print(self.selected_game)
-            self.selected_game = None
-        return btn
 
+    # ---- drawing ---------------------------------------------------------------
+    def _tab_labels(self):
+        return ["All"] + [config.EMULATORS[k]["console"] for k in self.filters[1:]]
+
+    def _tab_rects(self):
+        f, x, out = self.app.fonts["small"], 40, []
+        for label in self._tab_labels():
+            w = f.size(label)[0] + 28
+            out.append(pygame.Rect(x, 66, w, 30))
+            x += w + 8
+        return out
+
+    def _sort_rect(self):
+        w = self.app.screen.get_width()
+        return pygame.Rect(w - 260, 66, 220, 30)
 
     def draw(self, surface) -> None:
         th, f = config.THEME, self.app.fonts
         w, h = surface.get_size()
         surface.fill(th["bg"])
-        surface.blit(f["title"].render(config.TITLE, True, th["text"]), (60, 40))
-        selected = sum(b.toggled for b in self.grid.buttons)
-        count = f["small"].render(f"{selected} selected", True, th["text_dim"])
-        surface.blit(count, count.get_rect(topright=(w - 60, 52)))
+        surface.blit(f["title"].render("LIBRARY", True, th["text"]), (40, 18))
 
-        self.grid.draw(surface, f["button"], th, self.app.time)
+        for i, (label, r) in enumerate(zip(self._tab_labels(), self._tab_rects())):
+            on = i == self.filter_index
+            pygame.draw.rect(surface, th["button_on"] if on else th["panel"], r, border_radius=6)
+            t = f["small"].render(label, True, th["text_on"] if on else th["text"])
+            surface.blit(t, t.get_rect(center=r.center))
 
-        bar = pygame.Rect(0, h - 90, w, 90)
+        sr = self._sort_rect()
+        pygame.draw.rect(surface, th["panel"], sr, border_radius=6)
+        t = f["small"].render(f"Sort: {library.SORT_MODES[self.sort_mode][0]}  (Y/Tab)", True, th["text"])
+        surface.blit(t, t.get_rect(center=sr.center))
+
+        self.grid.draw(surface, f["card"], f["small"], th, self.app.time)
+
+        bar = pygame.Rect(0, h - self.FOOTER, w, self.FOOTER)
         pygame.draw.rect(surface, th["panel"], bar)
-        surface.blit(f["body"].render(self.message, True, th["text"]), (60, h - 78))
-        inp = self.app.input
-        names = inp.device_names()
-        devices = ", ".join(names) if names else "no controller connected (keyboard/mouse active)"
-        info = f"Controllers: {devices}   |   last input: {inp.last_source}"
-        if inp.last_raw_button:
-            info += f" ({inp.last_raw_button})"
-        surface.blit(f["small"].render(info, True, th["text_dim"]), (60, h - 46))
-        hint = f["small"].render("B / Esc: quit", True, th["text_dim"])
-        surface.blit(hint, hint.get_rect(topright=(w - 60, h - 46)))
+        surface.blit(f["body"].render(self.message, True, th["text"]), (40, h - 78))
+        g = self.grid.selected
+        if g:
+            emu = config.EMULATORS[g.emulator]["name"]
+            info = f"{g.title}  -  {g.console} via {emu}  -  played {g.play_count}x"
+            surface.blit(f["small"].render(info, True, th["text_dim"]), (40, h - 46))
+        hint = f["small"].render("Click tabs to filter  |  B / Esc: quit", True, th["text_dim"])
+        surface.blit(hint, hint.get_rect(topright=(w - 40, h - 46)))
 
 
 class ConfirmQuitScene(Scene):
