@@ -18,7 +18,8 @@ from scenes import LibraryScene, Scene
 class App:
     def __init__(self) -> None:
         pygame.init()
-        self.screen = pygame.display.set_mode(config.WINDOW_SIZE)
+        # self.screen = pygame.display.set_mode(config.WINDOW_SIZE)
+        self.screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         pygame.display.set_caption(config.TITLE)
         self.clock = pygame.time.Clock()
         self.time = 0.0
